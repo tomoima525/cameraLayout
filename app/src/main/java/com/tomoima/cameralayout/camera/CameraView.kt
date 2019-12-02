@@ -185,7 +185,6 @@ class CameraView(
 
             val displaySize = Point()
             activity?.windowManager?.defaultDisplay?.getRealSize(displaySize)
-
             // Danger, W.R.! Attempting to use too large a preview size could  exceed the camera
             // bus' bandwidth limitation, resulting in gorgeous previews but the storage of
             // garbage capture data.
@@ -217,7 +216,7 @@ class CameraView(
             ScreenSizeMode.FULL_SCREEN -> {
                 val activity = getActivity(context)
                 val displaySize = Point()
-                activity?.windowManager?.defaultDisplay?.getRealSize(displaySize)
+                activity?.windowManager?.defaultDisplay?.getSize(displaySize)
 
                 if(isSwappedDimension) {
                     println("====== $displaySize $height $width")
