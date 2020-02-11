@@ -4,7 +4,8 @@ It's been a while since I posted an article about how we take a photo using Came
 
 First, let me go through the necessary steps to configure the preview screen. Then I will explain two camera app examples -- the one that has a full-screen preview and the other that has the preview which fits the width of a screen.
 
-![art](./art/camera_layout.gif)
+
+<img src="./art/camera_layout.gif" width=300px />
 
 ## Step by step to understand configuring the preview screen
 
@@ -96,7 +97,8 @@ setupPreviewSize(camera: Camera, isDimensionSwapped: Boolean) {
 ```
 
 ### Step 2-a. Pick one capture size
-Usually, a device supports multiple capture sizes. We use the capture size to dictates the width and height of the preview. It is important to note that the preview size should be smaller than the capture size. Larger the better quality the resolution will be but also consumes more memory for the buffering.
+Usually, a device supports multiple capture sizes. We use the capture size to dictates the width and height of the preview. It is important to note that the preview size should be smaller than the capture size. Larger the better quality the resolution will be but also consumes more memory for the buffering.  
+
 `CameraCharacteristics` returns many attributes of a camera device and we can query the stream configuration map with key `SCALER_STREAM_CONFIGURATION_MAP`. The supported Capture screen sizes vary depending on the output format and can be looked up with the method called `getOutputSizes`. For example, if you want to look supported size for JPEG format(which is the commonly supported format in many devices) then the code would be like:
 
 ```kotlin
@@ -115,14 +117,14 @@ With Pixel3, Supported capture sizes for JPEG format are below.
 You have to pick one of them depending on your use case. I'll explain how to choose one in examples later on.
 
 ### Step 2-b. Adjust the preview size to fit the chosen capture size
-Based on the capture size you have picked, we have to configure the preview size.
+Based on the capture size you have picked, we have to configure the preview size.  
 First of all we access `CameraCharacteristics` again to get the list of supported preview sizes. We can acquire the list of SurfaceTexture like this:
 
 ```kotlin
 val supportedPreviewSizes = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP).getOutputSizes(SurfaceTexture::class.java)
 ```
 
-Then we look for the resolutions that have the same aspect ratio as the chosen capture size.
+Then we look for the resolutions that have the same aspect ratio as the chosen capture size.  
 The code below represents the process of choosing the right preview size.
 
 ```kotlin
@@ -163,7 +165,7 @@ previewSurface?.setDefaultBufferSize(previewSize.width, previewSize.height)
 ```
 
 ### Step 3. Update the PreviewTexture aspect ratio
-Now that we have the preview size defined, we need to adjust the aspect ratio of TextureView so that the preview does not distort. In the code below, we have a wrapper class of `TextureView` which we can set the aspect ratio to. We re-render TextureView by `requestLayout()`.
+Now that we have the preview size defined, we need to adjust the aspect ratio of TextureView so that the preview does not distort. In the code below, we have a wrapper class of `TextureView` which we can set the aspect ratio to. We re-render TextureView by `requestLayout()`.  
 
 (Note that if your camera app is fit to full screen, then you don't have to update the aspect ratio because the preview size and the screen size usually match.)
 
@@ -203,7 +205,7 @@ Now that you have some background of how the preview calculation works, let me g
 
 ### Example 1: Full-Screen Camera App
 
-<img src="./art/full-screen.png" width=300px />
+<img src="./art/full-screen.png" width=300px />  
 
 To create the app that has the full screen, you need to pick the Capture Size that fits the screen ratio. We fetch the supported Capture size as explained in Step 1. Then in Step 2, we sort the `supportedSizes` by aspect ratio by the calculation below.
 
@@ -290,7 +292,7 @@ Step 4, there's nothing special we need to do. You should see the full-screen pr
 
 ### Example 2: Portrait Camera app that has the preview which fits the width of the screen
 
-![width](./art/width-match.png)  
+<img src="./art/width-match.png" width=300px />  
 
 Let's choose one capture size as we did in Example 1. You can pick whatever you want, but my advice is to choose the one that has the largest size so that it covers most of the preview size.
 
