@@ -207,11 +207,9 @@ Now that you have some background of how the preview calculation works, let me g
 
 <img src="./art/full-screen.png" width=300px />  
 
-To create the app that has the full screen, you need to pick the Capture Size that fits the screen ratio. We fetch the supported Capture size as explained in Step 1. Then in Step 2, we sort the `supportedSizes` by aspect ratio by the calculation below.
+To create the app that has the full screen, you need to pick the Capture Size that fits the screen ratio. We fetch the supported Capture size as explained in Step 1.   
+Then in Step 2, we sort the `supportedSizes` by the order of aspect ratio.
 
-(figure)
-
-Here's the code that represents the formula above.
 
 ```kotlin
 private class ComparableByRatio(private val ratio: Double) : Comparator<Size> {
@@ -225,32 +223,19 @@ private class ComparableByRatio(private val ratio: Double) : Comparator<Size> {
 ```kotlin
 // CameraView.kt
 
-// Called at OnCreate
 override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     val point = Point()
     // Get the screen size
     getActivity(context)?.windowManager?.defaultDisplay?.getRealSize(point)
-    camera = Camera.initInstance(cameraManager, "0", point)
-    }
-  ...
-}
-
-// Camera.kt
-
-class Camera (
-    private val cameraManager: CameraManager,
-    private val cameraId: String,
-    screenSize: Point? = null,
-) {
-    private val screenRatio: Double = screenSize?.let { it.y.toDouble().div(it.x) } ?: 1.0
-    ...
+    val screenRatio: Double = screenSize?.let { it.y.toDouble().div(it.x) } ?: 1.0
     val comparator = ComparableByRatio(screenRatio)
-
+    
     // Pick the supported capture size that has closest aspect ratio to the screen size
     val fullScreenSize = supportedSizes.asList()
-        .maxWith(comparator)
+            .maxWith(comparator)
+  ...
 }
 ```
 
