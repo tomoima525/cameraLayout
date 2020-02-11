@@ -203,7 +203,7 @@ Now that you have some background of how the preview calculation works, let me g
 
 ### Example 1: Full-Screen Camera App
 
-![fullscreen](./art/full-screen.png)  
+<img src="./art/full-screen.png" width=300px />
 
 To create the app that has the full screen, you need to pick the Capture Size that fits the screen ratio. We fetch the supported Capture size as explained in Step 1. Then in Step 2, we sort the `supportedSizes` by aspect ratio by the calculation below.
 
