@@ -2,12 +2,18 @@ package com.tomoima.cameralayout.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.*
+import android.graphics.Matrix
+import android.graphics.Point
+import android.graphics.RectF
+import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraManager
 import android.util.AttributeSet
 import android.util.Size
-import android.view.*
+import android.view.MotionEvent
+import android.view.OrientationEventListener
+import android.view.Surface
 import android.view.TextureView.SurfaceTextureListener
+import android.view.View
 import android.view.View.OnTouchListener
 import android.widget.LinearLayout
 import android.widget.Toast
@@ -29,14 +35,13 @@ class CameraView(
     attributeSet: AttributeSet
 ) : LinearLayout(context, attributeSet), SurfaceTextureListener, OnTouchListener {
     private val TAG = CameraView::class.java.simpleName
-    private var camera: Camera? = null
-    private var previewTexture: AutoFitTextureView //TextureView for Camera
+    private lateinit var camera: Camera
+    private var previewTextureView: AutoFitTextureView //TextureView for Camera
     private var previewSurface: SurfaceTexture? = null // Surface to render preview of camera
-    private var previewSize: Size? = null
 
     init {
         View.inflate(context, R.layout.view_camera, this)
-        previewTexture = findViewById(R.id.camera_texture)
+        previewTextureView = findViewById(R.id.camera_texture)
     }
 
 
@@ -54,7 +59,7 @@ class CameraView(
 
             if (previous != newOrientation) {
                 previous = newOrientation
-                camera?.sensorRotation = newOrientation.ordinal
+                camera.sensorRotation = newOrientation.ordinal
             }
         }
     }
@@ -69,16 +74,16 @@ class CameraView(
         // use back camera for now
         camera = Camera.initInstance(cameraManager, "0")
 
-        previewTexture.surfaceTextureListener = this
+        previewTextureView.surfaceTextureListener = this
 
         orientationEventListener.enable()
     }
 
-    // Called at OnDestory
+    // Called at OnDestroy
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
-        camera?.close()
-        previewTexture.surfaceTextureListener = null
+        camera.close()
+        previewTextureView.surfaceTextureListener = null
         orientationEventListener.disable()
     }
 
@@ -88,7 +93,10 @@ class CameraView(
     }
 
     override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
-        configureTransform(width, height)
+        val isSwapped = isDimensionSwapped(camera)
+        setupPreviewSize(camera, isSwapped).also {
+            configureTransform(it, width, height)
+        }
     }
 
     override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
@@ -98,50 +106,46 @@ class CameraView(
 
 
     override fun onTouch(v: View?, event: MotionEvent?): Boolean {
-        TODO("not implemented") //To change body of created functions use File | Settings | File Templates.
+        return false
     }
 
     fun resumePreview() {
-        if(previewTexture.isAvailable) {
+        if(previewTextureView.isAvailable) {
             openCamera()
-        } else {
-            println("====== resume failed")
         }
     }
 
     fun pausePreview() {
-        camera?.close()
+        camera.close()
     }
 
     fun changeScreenMode(screenSizeMode: ScreenSizeMode) {
-        camera?.close()
+        camera.close()
         val point = Point()
         getActivity(context)?.windowManager?.defaultDisplay?.getRealSize(point)
 
-        camera?.changeScreenMode(screenSizeMode, point)
+        camera.changeScreenMode(screenSizeMode, point)
         openCamera()
     }
 
     private fun openCamera() {
-        if(!previewTexture.isAvailable) return
+        if(!previewTextureView.isAvailable) return
 
         val rotation = getActivity(context)?.windowManager?.defaultDisplay?.rotation ?: 0
-        camera?.deviceRotation = rotation
+        camera.deviceRotation = rotation
 
         val width = width
         val height = height
-        if (width == 0 || height == 0) {
-            throw IllegalStateException("preview is not properly set")
-        }
+        check(!(width == 0 || height == 0)) { "preview is not properly set" }
 
-        camera?.let {
+        camera.let {
             val isDimensionSwapped = isDimensionSwapped(it)
-            setUpCameraOutputs(width, height, it, isDimensionSwapped)
-            updateAspectRatio(it.screenSizeMode , isDimensionSwapped)
-            configureTransform(width, height)
+            val previewSize = setupPreviewSize(it, isDimensionSwapped)
+            updateAspectRatio(it.screenSizeMode , previewSize, isDimensionSwapped)
+            configureTransform(previewSize, width, height)
             it.open()
 
-            previewSurface?.setDefaultBufferSize(previewSize!!.width, previewSize!!.height)
+            previewSurface?.setDefaultBufferSize(previewSize.width, previewSize.height)
             it.start(Surface(previewSurface))
         }
     }
@@ -172,13 +176,12 @@ class CameraView(
     }
 
     /**
-     * Sets up member variables related to camera.
+     * Sets up preview size
      *
-     * @param width  The width of available size for camera preview
-     * @param height The height of available size for camera preview
      * @param camera The camera object use for capturing
+     * @param isSwappedDimension If the screen dimension is swapped
      */
-    private fun setUpCameraOutputs(width: Int, height: Int, camera: Camera, isSwappedDimension: Boolean) {
+    private fun setupPreviewSize(camera: Camera, isSwappedDimension: Boolean) : Size {
         try {
             val activity = getActivity(context)
             val largest = camera.getCaptureSize()
@@ -186,18 +189,15 @@ class CameraView(
             val displaySize = Point()
             activity?.windowManager?.defaultDisplay?.getRealSize(displaySize)
 
-            // Danger, W.R.! Attempting to use too large a preview size could  exceed the camera
-            // bus' bandwidth limitation, resulting in gorgeous previews but the storage of
-            // garbage capture data.
-            if (isSwappedDimension) {
-                previewSize = camera.chooseOptimalSize(
+            return if (isSwappedDimension) {
+                camera.getOptimalPreviewSize(
                     height,
                     width,
                     displaySize.y,
                     displaySize.x,
                     largest)
             } else {
-                previewSize = camera.chooseOptimalSize(
+                camera.getOptimalPreviewSize(
                     width,
                     height,
                     displaySize.x,
@@ -209,59 +209,64 @@ class CameraView(
             // Currently an NPE is thrown when the Camera2API is used but not supported on the
             // device this code runs.
             Toast.makeText(context, "rotation error", Toast.LENGTH_LONG).show()
+            return Size(0,0)
         }
     }
 
-    private fun updateAspectRatio(screenSizeMode: ScreenSizeMode, isSwappedDimension: Boolean) {
+    /**
+     * Setup the aspect ratio of preview Texture.
+     * When Full screen mode, the aspect ratio should be determined by the display size
+     * When Width match mode, the aspect ratio should be determined by the preview size. The preview
+     * size has the closest aspect ratio to the screen capture size
+     */
+    private fun updateAspectRatio(screenSizeMode: ScreenSizeMode, previewSize:Size, isSwappedDimension: Boolean) {
         when(screenSizeMode) {
             ScreenSizeMode.FULL_SCREEN -> {
                 val activity = getActivity(context)
                 val displaySize = Point()
-                activity?.windowManager?.defaultDisplay?.getRealSize(displaySize)
+                activity?.windowManager?.defaultDisplay?.getSize(displaySize)
 
                 if(isSwappedDimension) {
-                    println("====== $displaySize $height $width")
-                    previewTexture.setAspectRatio(displaySize.x, displaySize.y)
+                    previewTextureView.setAspectRatio(displaySize.x, displaySize.y)
                 } else {
-                    previewTexture.setAspectRatio(displaySize.y, displaySize.x)
+                    previewTextureView.setAspectRatio(displaySize.y, displaySize.x)
                 }
             }
             ScreenSizeMode.WIDTH_MATCH -> {
                 if(isSwappedDimension) {
-                    previewTexture.setAspectRatio(previewSize!!.height, previewSize!!.width)
+                    previewTextureView.setAspectRatio(previewSize.height, previewSize.width)
                 } else {
-                    previewTexture.setAspectRatio(previewSize!!.width, previewSize!!.height)
+                    previewTextureView.setAspectRatio(previewSize.width, previewSize.height)
                 }
             }
         }
     }
 
     /**
-     * Configures the necessary Matrix transformation to `mTextureView`.
+     * Configures the necessary Matrix transformation to `previewTextureView`.
      * This method should not to be called until the camera preview size is determined in
-     * openCamera, or until the size of `mTextureView` is fixed.
+     * openCamera, or until the size of `previewTextureView` is fixed.
      *
-     * @param viewWidth  The width of `textureView`
-     * @param viewHeight The height of `textureView`
+     * @param viewWidth  The width of `previewTextureView`
+     * @param viewHeight The height of `previewTextureView`
      */
-    private fun configureTransform(viewWidth: Int, viewHeight: Int) {
-        if (null == previewSize || null == context) {
+    private fun configureTransform(previewSize: Size, viewWidth: Int, viewHeight: Int) {
+        if (previewSize.width == 0 || null == context) {
             return
         }
 
         val rotation = getActivity(context)?.windowManager?.defaultDisplay?.rotation ?: Surface.ROTATION_0
         val matrix = Matrix()
         val viewRect = RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
-        previewSize?.apply {
-            val bufferRect = RectF(0f, 0f, height.toFloat(), width.toFloat())
+            val bufferRect = RectF(0f, 0f, previewSize.height.toFloat(), previewSize.width.toFloat())
             val centerX = viewRect.centerX()
             val centerY = viewRect.centerY()
 
             if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
                 bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
                 val scale = max(
-                    viewHeight.toFloat() / height,
-                    viewWidth.toFloat() / width)
+                    viewHeight.toFloat() / previewSize.height,
+                    viewWidth.toFloat() / previewSize.width)
                 matrix.apply {
                     setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
                     postScale(scale, scale, centerX, centerY)
@@ -270,7 +275,6 @@ class CameraView(
             } else if (Surface.ROTATION_180 == rotation) {
                 matrix.postRotate(180f, centerX, centerY)
             }
-        }
-        previewTexture.setTransform(matrix)
+        previewTextureView.setTransform(matrix)
     }
 }

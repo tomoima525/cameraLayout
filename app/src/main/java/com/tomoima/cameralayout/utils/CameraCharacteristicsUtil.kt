@@ -1,10 +1,8 @@
 package com.tomoima.cameralayout.utils
 
 import android.graphics.ImageFormat
-import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.params.StreamConfigurationMap
-import android.media.MediaRecorder
 import android.util.Size
 
 fun CameraCharacteristics.isSupported(
@@ -24,7 +22,6 @@ fun CameraCharacteristics.isAutoExposureSupported(mode: Int): Boolean =
         CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES,
         mode
     )
-
 
 fun CameraCharacteristics.isContinuousAutoFocusSupported(): Boolean =
     isSupported(

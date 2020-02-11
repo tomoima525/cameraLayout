@@ -79,7 +79,6 @@ class Camera constructor(private val cameraManager: CameraManager, private val c
     private val characteristics: CameraCharacteristics =
         cameraManager.getCameraCharacteristics(cameraId)
 
-
     private val openLock = Semaphore(1)
 
     private var cameraDevice: CameraDevice? = null
@@ -233,9 +232,7 @@ class Camera constructor(private val cameraManager: CameraManager, private val c
     fun open() {
 
         try {
-            if(!openLock.tryAcquire(3L, TimeUnit.SECONDS)) {
-                throw IllegalStateException("Camera launch failed")
-            }
+            check(openLock.tryAcquire(3L, TimeUnit.SECONDS)) { "Camera launch failed" }
 
             if(cameraDevice != null) {
                 openLock.release()
@@ -256,9 +253,8 @@ class Camera constructor(private val cameraManager: CameraManager, private val c
     fun start(surface: Surface) {
         this.surface = surface
         val comparable = getComparable()
-        // setup camera session
-        val size = characteristics.getCaptureSize(comparable)
-        imageReader = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 1)
+        val captureSize = characteristics.getCaptureSize(comparable)
+        imageReader = ImageReader.newInstance(captureSize.width, captureSize.height, ImageFormat.JPEG, 1)
         cameraDevice?.createCaptureSession(
             listOf(surface, imageReader?.surface),
             captureStateCallback,
@@ -306,6 +302,95 @@ class Camera constructor(private val cameraManager: CameraManager, private val c
         screenRatio = screenSize.let { it.y.toDouble().div(it.x) }
     }
 
+
+    /**
+     * Retrieves the image orientation from the specified screen rotation.
+     */
+    fun getImageOrientation(): Int {
+        if (deviceRotation == OrientationEventListener.ORIENTATION_UNKNOWN) {
+            return 0
+        }
+        val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        // Sensor orientation is 90 for most devices, or 270 for some devices (eg. Nexus 5X)
+        // We have to take that into account and rotate JPEG properly.
+        // For devices with orientation of 90, we simply return our mapping from ORIENTATIONS.
+        // For devices with orientation of 270, we need to rotate the JPEG 180 degrees.
+        return (ORIENTATIONS.get(deviceRotation) + sensorOrientation + 270) % 360
+    }
+
+    /**
+     * Get capture size based on an available comparator
+     */
+    fun getCaptureSize(): Size {
+        val comparable = getComparable()
+        return characteristics.getCaptureSize(comparable)
+    }
+
+    /**
+     * Get sensor orientation.
+     * 0, 90, 180, 270.
+     */
+    fun getSensorOrientation() = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+
+    /**
+     * Given `choices` of `Size`s supported by a camera, choose the smallest one that
+     * is at least as large as the respective texture view size, and that is at most as large as the
+     * respective max size, and whose aspect ratio matches with the specified value. If such size
+     * doesn't exist, choose the largest one that is at most as large as the respective max size,
+     * and whose aspect ratio matches with the specified value.
+     *
+     * @param textureViewWidth  The width of the texture view relative to sensor coordinate
+     * @param textureViewHeight The height of the texture view relative to sensor coordinate
+     * @param maxWidth          The maximum width that can be chosen
+     * @param maxHeight         The maximum height that can be chosen
+     * @param aspectRatio       The aspect ratio
+     * @return The optimal `Size`, or an arbitrary one if none were big enough
+     */
+    fun getOptimalPreviewSize(
+        textureViewWidth: Int,
+        textureViewHeight: Int,
+        maxWidth: Int,
+        maxHeight: Int,
+        aspectRatio: Size): Size {
+
+        val maxPreviewWidth = if (maxWidth > MAX_PREVIEW_WIDTH) {
+            MAX_PREVIEW_WIDTH
+        } else maxWidth
+
+        val maxPreviewHeight = if (maxHeight > MAX_PREVIEW_HEIGHT) {
+            MAX_PREVIEW_HEIGHT
+        } else maxHeight
+
+        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            ?: return Size(0, 0)
+
+        val choices = map.getOutputSizes(SurfaceTexture::class.java)
+
+        // Collect the supported resolutions that are at least as big as the preview Surface
+        val bigEnough = ArrayList<Size>()
+        // Collect the supported resolutions that are smaller than the preview Surface
+        val notBigEnough = ArrayList<Size>()
+        val w = aspectRatio.width
+        val h = aspectRatio.height
+        for (option in choices) {
+            if (option.width <= maxPreviewWidth && option.height <= maxPreviewHeight &&
+                option.height == option.width * h / w) {
+                if (option.width >= textureViewWidth && option.height >= textureViewHeight) {
+                    bigEnough.add(option)
+                } else {
+                    notBigEnough.add(option)
+                }
+            }
+        }
+        // Pick the smallest of those big enough. If there is no one big enough, pick the
+        // largest of those not big enough.
+        return when {
+            bigEnough.size > 0 -> Collections.min(bigEnough, ComparableByArea())
+            notBigEnough.size > 0 -> Collections.max(notBigEnough, ComparableByArea())
+            else -> choices[0]
+        }
+    }
+
     // internal methods
 
     private fun startBackgroundHandler() {
@@ -320,8 +405,6 @@ class Camera constructor(private val cameraManager: CameraManager, private val c
     private fun stopBackgroundHandler() {
         backgroundThread?.quitSafely()
         try {
-            // TODO: investigate why thread does not end when join is called
-            // backgroundThread?.join()
             backgroundThread = null
             backgroundHandler = null
         } catch (e: InterruptedException) {
@@ -333,10 +416,11 @@ class Camera constructor(private val cameraManager: CameraManager, private val c
             if(!openLock.tryAcquire(1L, TimeUnit.SECONDS)) return
             if(isClosed) return
             state = State.PREVIEW
-            val builder = createPreviewRequestBuilder()
-
-            captureSession?.setRepeatingRequest(
-                builder?.build(), captureCallback, backgroundHandler)
+            createPreviewRequestBuilder().let {
+                captureSession?.setRepeatingRequest(
+                    it.build(), captureCallback, backgroundHandler
+                )
+            }
 
         } catch (e1: IllegalStateException) {
 
@@ -353,12 +437,12 @@ class Camera constructor(private val cameraManager: CameraManager, private val c
         }
     }
 
-    @Throws(CameraAccessException::class)
-    private fun createPreviewRequestBuilder(): CaptureRequest.Builder? {
-        val builder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-        builder?.addTarget(surface)
-        enableDefaultModes(builder)
-        return builder
+    @Throws(CameraAccessException::class, CameraDeviceException::class)
+    private fun createPreviewRequestBuilder(): CaptureRequest.Builder {
+        return cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)?.also {
+            it.addTarget(surface)
+            enableDefaultModes(it)
+        } ?: throw CameraDeviceException()
     }
 
     private fun enableDefaultModes(builder: CaptureRequest.Builder?) {
@@ -400,14 +484,16 @@ class Camera constructor(private val cameraManager: CameraManager, private val c
 
             if(!characteristics.isContinuousAutoFocusSupported()) {
                 // If continuous AF is not supported , start AF here
-                builder?.set(
+                builder.set(
                     CaptureRequest.CONTROL_AF_TRIGGER,
                     CaptureRequest.CONTROL_AF_TRIGGER_START
                 )
             }
-            captureSession?.capture(builder?.build(), captureCallback, backgroundHandler)
+            captureSession?.capture(builder.build(), captureCallback, backgroundHandler)
         } catch (e: CameraAccessException) {
             println("lockFocus $e")
+        } catch (e: CameraDeviceException) {
+            println("device $e")
         }
     }
 
@@ -415,13 +501,15 @@ class Camera constructor(private val cameraManager: CameraManager, private val c
         try {
             state = State.WAITING_PRECAPTURE
             val builder = createPreviewRequestBuilder()
-            builder?.set(
+            builder.set(
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
                 CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START
             )
-            captureSession?.capture(builder?.build(), captureCallback, backgroundHandler)
+            captureSession?.capture(builder.build(), captureCallback, backgroundHandler)
         } catch (e: CameraAccessException) {
             println("runPreCapture $e")
+        } catch (e: CameraDeviceException) {
+            println("device $e")
         }
     }
 
@@ -433,10 +521,10 @@ class Camera constructor(private val cameraManager: CameraManager, private val c
         state = State.TAKEN
         try {
             // This is the CaptureRequest.Builder that we use to take a picture.
-            val builder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+            val builder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE) ?: throw CameraDeviceException()
             enableDefaultModes(builder)
-            builder?.addTarget(imageReader?.surface)
-            builder?.addTarget(surface)
+            builder.addTarget(imageReader?.surface)
+            builder.addTarget(surface)
             captureSession?.stopRepeating()
             captureSession?.capture(
                 builder?.build(),
@@ -451,96 +539,13 @@ class Camera constructor(private val cameraManager: CameraManager, private val c
 
         } catch (e: CameraAccessException) {
             println("captureStillPicture $e")
+        } catch (e: CameraDeviceException) {
+            println("cameraStillPicture $e")
         }
     }
 
     private fun getComparable() = when (screenSizeMode) {
         ScreenSizeMode.WIDTH_MATCH -> ComparableByArea()
         ScreenSizeMode.FULL_SCREEN -> ComparableByRatio(screenRatio)
-    }
-    /**
-     * Retrieves the image orientation from the specified screen rotation.
-     */
-    fun getImageOrientation(): Int {
-        if (deviceRotation == OrientationEventListener.ORIENTATION_UNKNOWN) {
-            return 0
-        }
-        val sensorOrientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-        // Sensor orientation is 90 for most devices, or 270 for some devices (eg. Nexus 5X)
-        // We have to take that into account and rotate JPEG properly.
-        // For devices with orientation of 90, we simply return our mapping from ORIENTATIONS.
-        // For devices with orientation of 270, we need to rotate the JPEG 180 degrees.
-        return (ORIENTATIONS.get(deviceRotation) + sensorOrientation + 270) % 360
-    }
-
-    fun getCaptureSize(): Size {
-        val comparable = getComparable()
-        return characteristics.getCaptureSize(comparable)
-    }
-
-    /**
-     * Get sensor orientation.
-     * 0, 90, 180, 270.
-     */
-    fun getSensorOrientation() = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-
-    /**
-     * Given `choices` of `Size`s supported by a camera, choose the smallest one that
-     * is at least as large as the respective texture view size, and that is at most as large as the
-     * respective max size, and whose aspect ratio matches with the specified value. If such size
-     * doesn't exist, choose the largest one that is at most as large as the respective max size,
-     * and whose aspect ratio matches with the specified value.
-     *
-     * @param textureViewWidth  The width of the texture view relative to sensor coordinate
-     * @param textureViewHeight The height of the texture view relative to sensor coordinate
-     * @param maxWidth          The maximum width that can be chosen
-     * @param maxHeight         The maximum height that can be chosen
-     * @param aspectRatio       The aspect ratio
-     * @return The optimal `Size`, or an arbitrary one if none were big enough
-     */
-    fun chooseOptimalSize(textureViewWidth: Int,
-                          textureViewHeight: Int,
-                          maxWidth: Int,
-                          maxHeight: Int,
-                          aspectRatio: Size): Size {
-        var _maxWidth = maxWidth
-        var _maxHeight = maxHeight
-
-        if (_maxWidth > MAX_PREVIEW_WIDTH) {
-            _maxWidth = MAX_PREVIEW_WIDTH
-        }
-
-        if (_maxHeight > MAX_PREVIEW_HEIGHT) {
-            _maxHeight = MAX_PREVIEW_HEIGHT
-        }
-
-        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?: return Size(0, 0)
-
-        val choices = map.getOutputSizes(SurfaceTexture::class.java)
-
-        // Collect the supported resolutions that are at least as big as the preview Surface
-        val bigEnough = ArrayList<Size>()
-        // Collect the supported resolutions that are smaller than the preview Surface
-        val notBigEnough = ArrayList<Size>()
-        val w = aspectRatio.width
-        val h = aspectRatio.height
-        for (option in choices) {
-            if (option.width <= _maxWidth && option.height <= _maxHeight &&
-                option.height == option.width * h / w) {
-                if (option.width >= textureViewWidth && option.height >= textureViewHeight) {
-                    bigEnough.add(option)
-                } else {
-                    notBigEnough.add(option)
-                }
-            }
-        }
-        // Pick the smallest of those big enough. If there is no one big enough, pick the
-        // largest of those not big enough.
-        return when {
-            bigEnough.size > 0 -> Collections.min(bigEnough, ComparableByArea())
-            notBigEnough.size > 0 -> Collections.max(notBigEnough, ComparableByArea())
-            else -> choices[0]
-        }
     }
 }
