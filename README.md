@@ -2,14 +2,13 @@
 
 It's been a while since I posted an article about how we take a photo using Camera2 API. Today I'm going to share the way to control the screen size of the preview.
 
-First, let me go through the necessary steps to configure the preview screen. Then I will explain two camera app examples -- the one that has a full-screen preview and the other that has the preview which fits the width of a screen.
-
+First, let me go through the necessary steps to configure the preview screen. Then I will explain two camera app examples -- the first one is a full-screen preview and the other one with the preview which fits the width of a screen.
 
 <img src="./art/camera_layout.gif" width=300px />
 
-## Step by step to understand configuring the preview screen
+## Step by step guide to understand how to configure the preview screen
 
-We configure the preview size right after Camera Manager is instantiated and SurfaceTexture, where the preview gets rendered, is ready.
+We configure the preview size right after Camera Manager is instantiated and `SurfaceTexture`, where the preview gets rendered, is ready.
 
 ```kotlin
 // CameraView.kt
@@ -26,9 +25,6 @@ fun openCamera() {
 
     // Step 3 Update the PreviewTexture aspect ratio
     updateAspectRatio(previewSize, isDimensionSwapped)
-
-    // Step 4 Transform scale and rotation of the view if necessary
-    configureTransform(previewSize, width, height)
 
     // Open Camera
     // ...
@@ -65,6 +61,7 @@ private fun isDimensionSwapped(): Boolean {
 ```
 
 ### Step 2. Setup the preview Size
+
 In the next step, we set up the preview size by checking the supported Capture screen sizes and picking one of them.
 Here's what we are doing under `setupPreviewSize`
 
@@ -96,27 +93,39 @@ setupPreviewSize(camera: Camera, isDimensionSwapped: Boolean) {
 }
 ```
 
-### Step 2-a. Pick one capture size
-Usually, a device supports multiple capture sizes. We use the capture size to dictates the width and height of the preview. It is important to note that the preview size should be smaller than the capture size. Larger the better quality the resolution will be but also consumes more memory for the buffering.  
+Now let me dig into what `getCaptureSize` and `getOptimalPreviewSize` are doing here.
 
-`CameraCharacteristics` returns many attributes of a camera device and we can query the stream configuration map with key `SCALER_STREAM_CONFIGURATION_MAP`. The supported Capture screen sizes vary depending on the output format and can be looked up with the method called `getOutputSizes`. For example, if you want to look supported size for JPEG format(which is the commonly supported format in many devices) then the code would be like:
+### Step 2-a. Pick one capture size
+
+Usually, a device supports multiple capture sizes. We use the capture size to dictates the width and height of the preview. It is important to note that the preview size should be smaller than the capture size. Larger the better quality the resolution will be but also consumes more memory for the buffering.
+
+`CameraCharacteristics` returns many attributes of a camera device and we can query the stream configuration map with the key called `SCALER_STREAM_CONFIGURATION_MAP`. The supported Capture screen sizes vary depending on the output format and can be looked up with the method called `getOutputSizes`. For example, if you want to look supported size for JPEG format(which is the commonly supported format in many devices) then the code would be like:
 
 ```kotlin
-private val characteristics: CameraCharacteristics =
+fun getCaptureSize() {
+    private val characteristics: CameraCharacteristics =
         cameraManager.getCameraCharacteristics(cameraId)
-val supportedSizes: Size[] =
+    val supportedSizes: Size[] =
         cameraCharacteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP).getOutputSizes(ImageFormat.JPEG)
+    ...
+}
 ```
 
 With Pixel3, Supported capture sizes for JPEG format are below.
 
 ```
-
+4032x3024, 4000x3000, 3840x2160, 4000x2000,
+3264x2448, 3200x2400, 2688x1512, 2592x1944,
+2048x1536,1920x1440, 1920x1080, 1600x1200,
+1920x960, 1280x960, 1280x768, 1280x720,
+1024x768, 800x400, 800x600, 800x480, 720x480,
+640x400, 640x480, 640x360, 352x288, 320x240, 176x144, 160x120
 ```
 
-You have to pick one of them depending on your use case. I'll explain how to choose one in examples later on.
+It's quite a lot, isn't it? You have to pick one from them depending on your use case. I'll explain how to choose one in examples later on.
 
 ### Step 2-b. Adjust the preview size to fit the chosen capture size
+
 Based on the capture size you have picked, we have to configure the preview size.  
 First of all we access `CameraCharacteristics` again to get the list of supported preview sizes. We can acquire the list of SurfaceTexture like this:
 
@@ -128,19 +137,19 @@ Then we look for the resolutions that have the same aspect ratio as the chosen c
 The code below represents the process of choosing the right preview size.
 
 ```kotlin
-fun getOptimalPreviewSize(isDimentionSwapped: Boolean) {
-    val capturedSize = getCapturedSize()
-    val aspectRatio: Size = if(isDimentionSwapped) {
-      Size(capturedSize.height, capturedSize.width)
-    } else {
-      Size(capturedSize.width, capturedSize.height)
-    }
-
+fun getOptimalPreviewSize(
+        textureViewWidth: Int,
+        textureViewHeight: Int,
+        maxWidth: Int,
+        maxHeight: Int,
+        aspectRatio: Size) {
+    ...
+    val supportedPreviewSizes = ...
     val bigEnough = ArrayList<Size>()
 
-    // maxPreviewWidth and maxPreviewHeight should be smaller than the screen size or the defined value
+    // maxWidth and maxHeight should be smaller than the screen size or the defined value
     for (option in supportedPreviewSizes) {
-        if (option.width <= maxPreviewWidth && option.height <= maxPreviewHeight &&
+        if (option.width <= maxWidth && option.height <= maxHeight &&
             option.height == option.width * aspectRatio.h / aspectRatio.w) {
               bigEnough.add(option)
         }
@@ -158,14 +167,15 @@ private class ComparableByArea : Comparator<Size> {
 }
 ```
 
-Finally, you set this preview size to TextureView's surface buffer so that it renders correctly.
+Finally, you set this preview size to TextureView's surface buffer so that it renders in a proper aspect.
 
-```
+```kotlin
 previewSurface?.setDefaultBufferSize(previewSize.width, previewSize.height)
 ```
 
 ### Step 3. Update the PreviewTexture aspect ratio
-Now that we have the preview size defined, we need to adjust the aspect ratio of TextureView so that the preview does not distort. In the code below, we have a wrapper class of `TextureView` which we can set the aspect ratio to. We re-render TextureView by `requestLayout()`.  
+
+Now that we have the preview size defined, we need to adjust the aspect ratio of TextureView so that the preview does not distort. In the code below, we have a wrapper class of `TextureView` which we can set the aspect ratio to. We re-render TextureView by `requestLayout()`.
 
 (Note that if your camera app is fit to full screen, then you don't have to update the aspect ratio because the preview size and the screen size usually match.)
 
@@ -195,21 +205,16 @@ override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
 }
 ```
 
-### Step 4. Transform scale and rotation of the view if necessary
-
-One last step, we need to flip, rotate, or scale the preview. However, this is only necessary in case your camera app supports the screen rotation. If your app only supports Portrait(which I think is enough for most use cases), you can skip this process. I brought this logic from the sample code of Google, so I won't explain it too much. Instead, I'll visualize what kind of calculation happening here.
-
 ## Examples
 
 Now that you have some background of how the preview calculation works, let me give you two examples.
 
 ### Example 1: Full-Screen Camera App
 
-<img src="./art/full-screen.png" width=300px />  
+<img src="./art/full-screen.png" width=300px />
 
-To create the app that has the full screen, you need to pick the Capture Size that fits the screen ratio. We fetch the supported Capture size as explained in Step 1.   
+To create the app that has the full screen, you need to pick the Capture Size that fits the screen ratio. We fetch the supported Capture size as explained in Step 1.  
 Then in Step 2, we sort the `supportedSizes` by the order of aspect ratio.
-
 
 ```kotlin
 private class ComparableByRatio(private val ratio: Double) : Comparator<Size> {
@@ -231,7 +236,7 @@ override fun onAttachedToWindow() {
     getActivity(context)?.windowManager?.defaultDisplay?.getRealSize(point)
     val screenRatio: Double = screenSize?.let { it.y.toDouble().div(it.x) } ?: 1.0
     val comparator = ComparableByRatio(screenRatio)
-    
+
     // Pick the supported capture size that has closest aspect ratio to the screen size
     val fullScreenSize = supportedSizes.asList()
             .maxWith(comparator)
@@ -273,11 +278,9 @@ By the way, you can even skip this step if you use `TextureView` instead of `Aut
 </LinearLayout>
 ```
 
-Step 4, there's nothing special we need to do. You should see the full-screen preview now.
-
 ### Example 2: Portrait Camera app that has the preview which fits the width of the screen
 
-<img src="./art/width-match.png" width=300px />  
+<img src="./art/width-match.png" width=300px />
 
 Let's choose one capture size as we did in Example 1. You can pick whatever you want, but my advice is to choose the one that has the largest size so that it covers most of the preview size.
 
@@ -326,4 +329,3 @@ private fun updateAspectRatio(screenSizeMode: ScreenSizeMode, isSwappedDimension
 # Wrap up
 
 In this post, I illustrated the step to configure the preview of Camera. It doesn't look straightforward at first glance, but once you understand how it behaves, you will get full control of how to design your camera app.
-
