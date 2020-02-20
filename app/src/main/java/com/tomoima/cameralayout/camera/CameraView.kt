@@ -2,9 +2,7 @@ package com.tomoima.cameralayout.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.graphics.Matrix
 import android.graphics.Point
-import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraManager
 import android.util.AttributeSet
@@ -19,7 +17,6 @@ import android.widget.LinearLayout
 import android.widget.Toast
 import com.tomoima.cameralayout.R
 import com.tomoima.cameralayout.utils.getActivity
-import kotlin.math.max
 
 
 enum class Orientation(degree: Int) {
@@ -94,9 +91,7 @@ class CameraView(
 
     override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
         val isSwapped = isDimensionSwapped(camera)
-        setupPreviewSize(camera, isSwapped).also {
-            configureTransform(it, width, height)
-        }
+        setupPreviewSize(camera, isSwapped)
     }
 
     override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {
@@ -141,11 +136,10 @@ class CameraView(
         camera.let {
             val isDimensionSwapped = isDimensionSwapped(it)
             val previewSize = setupPreviewSize(it, isDimensionSwapped)
+            previewSurface?.setDefaultBufferSize(previewSize.width, previewSize.height)
             updateAspectRatio(it.screenSizeMode , previewSize, isDimensionSwapped)
-            configureTransform(previewSize, width, height)
             it.open()
 
-            previewSurface?.setDefaultBufferSize(previewSize.width, previewSize.height)
             it.start(Surface(previewSurface))
         }
     }
@@ -240,41 +234,5 @@ class CameraView(
                 }
             }
         }
-    }
-
-    /**
-     * Configures the necessary Matrix transformation to `previewTextureView`.
-     * This method should not to be called until the camera preview size is determined in
-     * openCamera, or until the size of `previewTextureView` is fixed.
-     *
-     * @param viewWidth  The width of `previewTextureView`
-     * @param viewHeight The height of `previewTextureView`
-     */
-    private fun configureTransform(previewSize: Size, viewWidth: Int, viewHeight: Int) {
-        if (previewSize.width == 0 || null == context) {
-            return
-        }
-
-        val rotation = getActivity(context)?.windowManager?.defaultDisplay?.rotation ?: Surface.ROTATION_0
-        val matrix = Matrix()
-        val viewRect = RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
-            val bufferRect = RectF(0f, 0f, previewSize.height.toFloat(), previewSize.width.toFloat())
-            val centerX = viewRect.centerX()
-            val centerY = viewRect.centerY()
-
-            if (Surface.ROTATION_90 == rotation || Surface.ROTATION_270 == rotation) {
-                bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
-                val scale = max(
-                    viewHeight.toFloat() / previewSize.height,
-                    viewWidth.toFloat() / previewSize.width)
-                matrix.apply {
-                    setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
-                    postScale(scale, scale, centerX, centerY)
-                    postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
-                }
-            } else if (Surface.ROTATION_180 == rotation) {
-                matrix.postRotate(180f, centerX, centerY)
-            }
-        previewTextureView.setTransform(matrix)
     }
 }
